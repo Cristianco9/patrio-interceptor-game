@@ -9,6 +9,7 @@ import {
   findBracket,
   interceptorFor,
   makeScenario,
+  realX,
   solveWith,
   type Bracket,
   type MissionSolve,
@@ -42,7 +43,7 @@ export interface Mission {
   outcome: Outcome;
 }
 
-export const METHODS: MethodId[] = ['bisection', 'newton', 'secant'];
+export const METHODS: MethodId[] = ['bisection', 'newton', 'secant', 'fixedpoint'];
 
 /** Scene framing: base, enemy trajectory, and the interceptor's if it exists. */
 export function computeBounds(sc: Scenario, phi: number | null): ViewBounds {
@@ -71,9 +72,10 @@ export function computeBounds(sc: Scenario, phi: number | null): ViewBounds {
 function impactNote(sc: Scenario): string {
   const r = range(sc.enemy);
   const near = Math.abs(r - sc.baseX) < 50;
+  const x = realX(sc, r);
   return near
-    ? `The projectile impacts at x = ${r.toFixed(0)} m: base reached.`
-    : `The projectile falls at x = ${r.toFixed(0)} m.`;
+    ? `The projectile impacts at x = ${x.toFixed(0)} m: base reached.`
+    : `The projectile falls at x = ${x.toFixed(0)} m.`;
 }
 
 function buildOutcome(sc: Scenario, result: MissionSolve, bracket: Bracket | null): Outcome {
@@ -83,7 +85,7 @@ function buildOutcome(sc: Scenario, result: MissionSolve, bracket: Bracket | nul
       kind: 'hit',
       title: 'Target neutralized',
       detail:
-        `Intercepted at x = ${result.hit.x.toFixed(1)} m, y = ${result.hit.y.toFixed(1)} m, ` +
+        `Intercepted at x = ${realX(sc, result.hit.x).toFixed(1)} m, y = ${result.hit.y.toFixed(1)} m, ` +
         `t = ${result.hit.t.toFixed(2)} s. Firing angle ${rad2deg(result.hit.phi).toFixed(3)}° ` +
         `(${n} iterations).`,
     };
@@ -110,13 +112,15 @@ export function buildMission(
   tol: number,
   vi: number,
   delay: number,
+  mirror = false,
 ): Mission {
-  const scenario = makeScenario(angleDeg, speed, vi, delay);
+  const scenario = makeScenario(angleDeg, speed, vi, delay, mirror);
   const bracket = findBracket(scenario);
   const results = {
     bisection: solveWith(scenario, 'bisection', bracket, tol),
     newton: solveWith(scenario, 'newton', bracket, tol),
     secant: solveWith(scenario, 'secant', bracket, tol),
+    fixedpoint: solveWith(scenario, 'fixedpoint', bracket, tol),
   } satisfies Record<MethodId, MissionSolve>;
   const result = results[method];
   return {

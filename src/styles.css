@@ -296,6 +296,20 @@ select {
   padding: 5px 8px;
 }
 
+.turn {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.turn strong {
+  color: var(--amber);
+  font-weight: 400;
+}
+
+.turn--round {
+  color: var(--phosphor);
+}
+
 .methods {
   display: flex;
   flex-direction: column;
