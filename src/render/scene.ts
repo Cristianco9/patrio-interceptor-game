@@ -6,7 +6,7 @@ import {
   velocityAt,
   type Projectile,
 } from '../physics/projectile';
-import { crossingFor, interceptorFor, type Scenario } from '../numerical/interception';
+import { crossingFor, interceptorFor, realX, type Scenario } from '../numerical/interception';
 import { computeBounds, type Mission, type Outcome, type Phase, type ViewBounds } from '../mission';
 
 export interface ExplosionState {
@@ -47,6 +47,24 @@ const COLOR = {
   textDim: '#6f8750',
 };
 
+/** Per-side look: the Attacker is always red, Patrio is always green. */
+const SIDE = {
+  attacker: {
+    body: '#6e3a2f',
+    missile: '#d9d2bd',
+    nose: COLOR.red,
+    trail: '255,110,90',
+    dash: '255,77,61',
+  },
+  patrio: {
+    body: '#5c6e36',
+    missile: '#cfe3b0',
+    nose: COLOR.phosphor,
+    trail: '154,255,107',
+    dash: '154,255,107',
+  },
+};
+
 const FONT_MONO = "'Share Tech Mono', 'Courier New', monospace";
 const FONT_STENCIL = "'Black Ops One', Impact, 'Arial Black', sans-serif";
 
@@ -58,9 +76,11 @@ interface Transform {
   oy: number;
   sx: (x: number) => number;
   sy: (y: number) => number;
+  mirror: boolean;
+  baseX: number;
 }
 
-function makeTransform(w: number, h: number, b: ViewBounds): Transform {
+function makeTransform(w: number, h: number, b: ViewBounds, mirror: boolean, baseX: number): Transform {
   const padL = 58;
   const padR = 22;
   const padT = 58;
@@ -69,7 +89,11 @@ function makeTransform(w: number, h: number, b: ViewBounds): Transform {
   const contentW = (b.xMax - b.xMin) * s;
   const ox = padL + (w - padL - padR - contentW) / 2 - b.xMin * s;
   const oy = h - padB;
-  return { s, ox, oy, sx: (x) => ox + x * s, sy: (y) => oy - y * s };
+  // Mirrored scene: reflect inside the content area so the shooter appears on the right.
+  const left = ox + b.xMin * s;
+  const right = ox + b.xMax * s;
+  const sx = mirror ? (x: number) => left + right - (ox + x * s) : (x: number) => ox + x * s;
+  return { s, ox, oy, sx, sy: (y) => oy - y * s, mirror, baseX };
 }
 
 function niceStep(raw: number): number {
@@ -123,7 +147,7 @@ function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, T: Transf
     ctx.lineTo(px, T.oy);
     ctx.stroke();
     ctx.textAlign = 'center';
-    ctx.fillText(`${x}`, px, T.oy + 38);
+    ctx.fillText(`${T.mirror ? T.baseX - x : x}`, px, T.oy + 38);
   }
   for (let y = yStep; y <= b.yMax; y += yStep) {
     const major = Math.round(y / yStep) % 5 === 0;
@@ -229,7 +253,7 @@ function drawLauncher(
   ctx.restore();
 
   ctx.save();
-  ctx.fillStyle = body === '#5c6e36' ? COLOR.text : COLOR.red;
+  ctx.fillStyle = body === SIDE.patrio.body ? COLOR.text : COLOR.red;
   ctx.font = `11px ${FONT_MONO}`;
   ctx.textAlign = 'center';
   ctx.fillText(label, px, py + 18);
@@ -437,9 +461,15 @@ export function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, f
   const sc = f.scenario;
   const m = f.mission;
   const bounds = m ? m.view : computeBounds(sc, null);
-  const T = makeTransform(w, h, bounds);
+  const T = makeTransform(w, h, bounds, sc.mirror, sc.baseX);
+  const flip = sc.mirror ? -1 : 1;
   const rows = m ? m.result.iterations : [];
   const hit = m ? m.result.hit : null;
+
+  // mirror === true means Patrio is the one firing.
+  const shooter = SIDE[sc.mirror ? 'patrio' : 'attacker'];
+  const responder = SIDE[sc.mirror ? 'attacker' : 'patrio'];
+  const shooterName = sc.mirror ? 'Patrio' : 'Attacker';
 
   ctx.clearRect(0, 0, w, h);
   drawBackground(ctx, w, h, T);
@@ -451,11 +481,11 @@ export function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, f
   const showingSolution = f.phase === 'solving' || f.phase === 'hold';
   const flightStarted = f.phase === 'flying' || f.phase === 'explosion' || f.phase === 'result';
 
-  // Predicted enemy trajectory (degree-2 polynomial in x)
+  // Predicted trajectory of the shooter's projectile (degree-2 polynomial in x)
   ctx.save();
   ctx.setLineDash([7, 6]);
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = flightStarted ? 'rgba(255,77,61,0.28)' : 'rgba(255,77,61,0.7)';
+  ctx.strokeStyle = `rgba(${shooter.dash},${flightStarted ? 0.28 : 0.7})`;
   strokePath(ctx, T, samplePath(enemy, 120));
   ctx.restore();
 
@@ -528,7 +558,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, f
         ctx.font = `12px ${FONT_MONO}`;
         ctx.fillStyle = COLOR.phosphor;
         ctx.textAlign = 'left';
-        ctx.fillText(`(${hit.x.toFixed(1)}, ${hit.y.toFixed(1)}) m`, px + 26, py - 14);
+        ctx.fillText(`(${realX(sc, hit.x).toFixed(1)}, ${hit.y.toFixed(1)}) m`, px + 26, py - 14);
         ctx.restore();
       }
     }
@@ -538,25 +568,28 @@ export function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, f
   let batteryAngle = Math.PI / 4;
   if (shown > 0) batteryAngle = rows[shown - 1].angle;
   if (hit && flightStarted) batteryAngle = hit.phi;
+
+  // The shooter sits at internal x = 0 (drawn on the right when mirrored).
   drawLauncher(
     ctx,
     T.sx(0),
     T.sy(0),
     enemy.angle,
-    1,
-    '#6e3a2f',
-    'Enemy origin',
+    sc.mirror ? -1 : 1,
+    shooter.body,
+    sc.mirror ? 'Patrio (east)' : 'Attacker (west)',
     f.clock,
     false,
   );
+  // The responder sits at internal x = baseX and computes the interception.
   drawLauncher(
     ctx,
     T.sx(sc.baseX),
     T.sy(0),
     batteryAngle,
-    -1,
-    '#5c6e36',
-    'Patrio',
+    sc.mirror ? 1 : -1,
+    responder.body,
+    sc.mirror ? 'Attacker (west)' : 'Patrio (east)',
     f.clock,
     f.phase === 'solving',
   );
@@ -568,16 +601,16 @@ export function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, f
 
     // After impact or interception there are no more projectiles to draw.
     if (f.phase === 'flying') {
-      drawTrail(ctx, T, enemy, t, '255,110,90', 1.6);
+      drawTrail(ctx, T, enemy, t, shooter.trail, 1.6);
       const pe = positionAt(enemy, t);
       const ve = velocityAt(enemy, t);
       drawMissile(
         ctx,
         T.sx(pe.x),
         T.sy(Math.max(0, pe.y)),
-        Math.atan2(-ve.y, ve.x),
-        '#d9d2bd',
-        COLOR.red,
+        Math.atan2(-ve.y, flip * ve.x),
+        shooter.missile,
+        shooter.nose,
         false,
         f.clock,
       );
@@ -585,16 +618,16 @@ export function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, f
 
     if (hit && f.phase === 'flying' && t > sc.delay) {
       const ic = interceptorFor(sc, hit.phi);
-      drawTrail(ctx, T, ic, t, '154,255,107', 1.6);
+      drawTrail(ctx, T, ic, t, responder.trail, 1.6);
       const pi = positionAt(ic, t);
       const vi = velocityAt(ic, t);
       drawMissile(
         ctx,
         T.sx(pi.x),
         T.sy(Math.max(0, pi.y)),
-        Math.atan2(-vi.y, vi.x),
-        '#cfe3b0',
-        COLOR.phosphor,
+        Math.atan2(-vi.y, flip * vi.x),
+        responder.missile,
+        responder.nose,
         true,
         f.clock,
       );
@@ -621,6 +654,10 @@ export function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, f
     w - 24,
     30,
   );
+  // Who is firing
+  ctx.textAlign = 'center';
+  ctx.fillStyle = sc.mirror ? COLOR.phosphor : COLOR.red;
+  ctx.fillText(`${shooterName.toUpperCase()} FIRES`, w / 2, 30);
   ctx.restore();
 
   if (f.phase === 'result' && f.outcome) {
