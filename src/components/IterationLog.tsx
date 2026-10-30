@@ -17,12 +17,14 @@ const deg = (rad: number) => rad2deg(rad).toFixed(4);
 function extraHeader(method: MethodId): string {
   if (method === 'bisection') return 'Interval [a, b]';
   if (method === 'newton') return "f′(φ)";
+  if (method === 'fixedpoint') return 'g(φ) (°)';
   return 'φₖ₋₁';
 }
 
 function extraCell(method: MethodId, r: IterationRow): string {
   if (method === 'bisection') return `[${rad2deg(r.a!).toFixed(3)}, ${rad2deg(r.b!).toFixed(3)}]`;
   if (method === 'newton') return r.dfx === undefined ? '—' : fmt(r.dfx);
+  if (method === 'fixedpoint') return r.gx === undefined ? '—' : deg(r.gx);
   return r.prev === undefined ? '—' : deg(r.prev);
 }
 
