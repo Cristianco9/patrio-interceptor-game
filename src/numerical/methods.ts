@@ -3,7 +3,7 @@
  * Here the unknown x is the interceptor's firing angle (in radians).
  */
 
-export type MethodId = 'bisection' | 'newton' | 'secant';
+export type MethodId = 'bisection' | 'newton' | 'secant' | 'fixedpoint';
 
 export type Fn = (x: number) => number;
 
@@ -23,6 +23,8 @@ export interface IterationRow {
   dfx?: number;
   /** Secant: previous approximation. */
   prev?: number;
+  /** Fixed point: g(x), the next approximation. */
+  gx?: number;
 }
 
 export interface SolveResult {
@@ -62,6 +64,12 @@ export const METHOD_INFO: Record<
     short: 'SECANT',
     formula: 'xₖ₊₁ = xₖ − f(xₖ)(xₖ − xₖ₋₁) / (f(xₖ) − f(xₖ₋₁))',
     kind: 'Open: uses two approximations, without a derivative',
+  },
+  fixedpoint: {
+    name: 'Fixed point',
+    short: 'FIXED POINT',
+    formula: 'xₖ₊₁ = g(xₖ) = xₖ − f(xₖ) / m',
+    kind: 'Open: rewrites f(x) = 0 as x = g(x) and iterates; converges if |g′(x)| < 1',
   },
 };
 
@@ -167,4 +175,38 @@ export function secant(f: Fn, x0: number, x1: number, opts: MethodOptions): Solv
     x = next;
   }
   return fail('secant', rows, `Did not reach the tolerance in ${opts.maxIter} iterations.`);
+}
+
+/**
+ * Fixed-point iteration x_{k+1} = g(x_k) from x0.
+ *
+ * f(x) = 0 is rewritten as x = g(x) with g(x) = x − f(x)/m, where m is a constant
+ * slope (here, the chord slope of f over the starting interval). Since
+ * g′(x) = 1 − f′(x)/m, the iteration converges when |g′(x)| < 1 near the root,
+ * i.e. when f′(x)/m lies in (0, 2).
+ */
+export function fixedPoint(f: Fn, x0: number, slope: number, opts: MethodOptions): SolveResult {
+  const rows: IterationRow[] = [];
+  if (!Number.isFinite(slope) || Math.abs(slope) < 1e-12) {
+    return fail('fixedpoint', rows, 'The slope m is nearly zero: g(x) cannot be built.');
+  }
+  const g: Fn = (x) => x - f(x) / slope;
+  let x = x0;
+  let prev: number | null = null;
+
+  for (let k = 0; k <= opts.maxIter; k++) {
+    const fx = f(x);
+    const next = g(x);
+    rows.push({ k, angle: x, fx, err: prev === null ? null : Math.abs(x - prev), gx: next });
+
+    if (Math.abs(fx) < opts.tol) {
+      return done('fixedpoint', rows, x, `Converged in ${k} iterations.`);
+    }
+    if (!Number.isFinite(next) || next < opts.domain[0] || next > opts.domain[1]) {
+      return fail('fixedpoint', rows, 'The iteration diverged: g(x) falls outside the firing range (|g′(x)| ≥ 1).');
+    }
+    prev = x;
+    x = next;
+  }
+  return fail('fixedpoint', rows, `Did not reach the tolerance in ${opts.maxIter} iterations.`);
 }

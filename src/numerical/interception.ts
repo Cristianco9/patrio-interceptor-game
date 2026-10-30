@@ -25,6 +25,7 @@ import {
 } from '../physics/projectile';
 import {
   bisection,
+  fixedPoint,
   newtonRaphson,
   secant,
   type Fn,
@@ -48,6 +49,12 @@ export interface Scenario {
   vi: number;
   /** Firing delay (s). */
   delay: number;
+  /**
+   * Physics always runs with the attacker at x = 0 firing right and the battery at x = baseX.
+   * When mirror is true the attacker is on the right side of the screen: only the drawing
+   * and the displayed coordinates are reflected (x_real = baseX − x).
+   */
+  mirror: boolean;
 }
 
 export interface Hit {
@@ -71,6 +78,7 @@ export function makeScenario(
   speed: number,
   vi: number,
   delay: number,
+  mirror = false,
   baseX = BASE_X,
 ): Scenario {
   return {
@@ -78,8 +86,12 @@ export function makeScenario(
     baseX,
     vi,
     delay,
+    mirror,
   };
 }
+
+/** Converts an x of the internal model into the x shown to the player. */
+export const realX = (sc: Scenario, x: number): number => (sc.mirror ? sc.baseX - x : x);
 
 export function interceptorFor(sc: Scenario, phi: number): Projectile {
   return { x0: sc.baseX, y0: 0, v: sc.vi, angle: phi, dir: -1, t0: sc.delay };
@@ -186,6 +198,11 @@ export function solveWith(
     case 'secant':
       result = secant(f, bracket.a, bracket.b, opts);
       break;
+    case 'fixedpoint': {
+      const slope = (f(bracket.b) - f(bracket.a)) / (bracket.b - bracket.a);
+      result = fixedPoint(f, (bracket.a + bracket.b) / 2, slope, opts);
+      break;
+    }
   }
 
   if (result.converged && result.root !== null) {
